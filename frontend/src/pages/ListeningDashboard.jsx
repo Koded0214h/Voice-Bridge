@@ -203,7 +203,7 @@ const ListeningDashboard = () => {
 
   const handleNewRecording = () => {
     localStorage.removeItem('currentAnnouncement');
-    navigate('/microphone');
+    navigate('/mic-setup');
   };
 
   const handleViewHistory = () => {

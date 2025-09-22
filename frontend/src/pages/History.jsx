@@ -64,7 +64,7 @@ const HistoryPage = () => {
   };
 
   const createNewRecording = () => {
-    navigate('/microphone');
+    navigate('/mic-setup');
   };
 
   const goToDashboard = () => {

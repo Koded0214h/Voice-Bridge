@@ -30,7 +30,7 @@ DEBUG = True
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["voice-bridge-backend.onrender.com", "127.0.0.1:8000"]
 
 
 # Application definition

@@ -9,6 +9,17 @@ from .serializers import AnnouncementSerializer
 import os
 import uuid
 import json
+import tempfile
+import subprocess
+
+# Import Cloudinary
+try:
+    import cloudinary
+    import cloudinary.uploader
+    import cloudinary.api
+    CLOUDINARY_AVAILABLE = True
+except ImportError:
+    CLOUDINARY_AVAILABLE = False
 
 # Init Spitch client
 spitch = Spitch(api_key=settings.SPITCH_API_KEY)
@@ -29,6 +40,57 @@ class CreateAnnouncementView(APIView):
             )
 
         return self._process_announcement(request, text, languages, tone)
+
+    def _upload_to_cloudinary(self, audio_bytes, filename, language):
+        """Upload audio bytes to Cloudinary"""
+        try:
+            if not CLOUDINARY_AVAILABLE:
+                raise Exception("Cloudinary not available")
+            
+            # Create a temporary file to upload
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+                temp_file.write(audio_bytes)
+                temp_file_path = temp_file.name
+
+            try:
+                # Upload to Cloudinary
+                upload_result = cloudinary.uploader.upload(
+                    temp_file_path,
+                    resource_type = "video",  # Use "video" for audio files
+                    public_id = f"voicebridge/announcements/{filename}",
+                    folder = "voicebridge/announcements",
+                    overwrite = True,
+                    resource_type = "raw"  # Use "raw" for non-image files
+                )
+                
+                print(f"Cloudinary upload successful: {upload_result['secure_url']}")
+                return upload_result['secure_url']
+                
+            finally:
+                # Clean up temporary file
+                os.unlink(temp_file_path)
+                
+        except Exception as e:
+            print(f"Cloudinary upload failed: {e}")
+            # Fallback to local storage if Cloudinary fails
+            return self._save_locally(audio_bytes, filename, request)
+
+    def _save_locally(self, audio_bytes, filename, request):
+        """Fallback to local storage"""
+        try:
+            file_path = os.path.join(settings.MEDIA_ROOT, filename)
+            os.makedirs(settings.MEDIA_ROOT, exist_ok=True)
+
+            with open(file_path, "wb") as f:
+                f.write(audio_bytes)
+
+            audio_url = request.build_absolute_uri(f"{settings.MEDIA_URL}{filename}")
+            print(f"Local storage fallback: {audio_url}")
+            return audio_url
+            
+        except Exception as e:
+            print(f"Local storage also failed: {e}")
+            raise e
 
     def _process_announcement(self, request, text, languages, tone):
         translations = {}
@@ -63,7 +125,7 @@ class CreateAnnouncementView(APIView):
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
 
-            # 2. TTS (generate audio bytes)
+            # 2. TTS (generate audio bytes) and upload to Cloudinary
             try:
                 voice_map = {
                     "yo": "femi",
@@ -83,18 +145,19 @@ class CreateAnnouncementView(APIView):
                 audio_bytes = resp.http_response.content
                 print(f"TTS generated for {lang}, audio size: {len(audio_bytes)} bytes")
 
-                # Save audio file with unique name
+                # Generate unique filename
                 filename = f"announcement_{lang}_{uuid.uuid4().hex}.wav"
-                file_path = os.path.join(settings.MEDIA_ROOT, filename)
-                os.makedirs(settings.MEDIA_ROOT, exist_ok=True)
-
-                with open(file_path, "wb") as f:
-                    f.write(audio_bytes)
-
-                audio_files[lang] = request.build_absolute_uri(
-                    f"{settings.MEDIA_URL}{filename}"
-                )
-                print(f"Audio saved for {lang}: {audio_files[lang]}")
+                
+                # Upload to Cloudinary
+                try:
+                    audio_url = self._upload_to_cloudinary(audio_bytes, filename, lang)
+                    audio_files[lang] = audio_url
+                    print(f"Audio uploaded to Cloudinary for {lang}: {audio_url}")
+                    
+                except Exception as upload_error:
+                    print(f"Cloudinary upload failed, using local storage: {upload_error}")
+                    audio_url = self._save_locally(audio_bytes, filename, request)
+                    audio_files[lang] = audio_url
 
             except Exception as e:
                 error_msg = f"TTS failed for {lang}: {str(e)}"
@@ -165,26 +228,40 @@ class TranscribeAnnouncementView(CreateAnnouncementView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # 1. Transcribe - CORRECTED BASED ON SPITCH DOCS
+        # 1. Transcribe - WITH AUDIO CONVERSION
         try:
             print(f"Transcribing audio file: {audio_file.name}, size: {audio_file.size} bytes, type: {audio_file.content_type}")
 
-            # Read the audio file content
-            audio_content = b''
-            for chunk in audio_file.chunks():
-                audio_content += chunk
+            # Save uploaded file temporarily
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_webm:
+                for chunk in audio_file.chunks():
+                    temp_webm.write(chunk)
+                webm_path = temp_webm.name
 
-            print(f"Audio content size: {len(audio_content)} bytes")
-
-            # Convert WebM to WAV if needed (Spitch supports wav, mp3, m4a, ogg)
-            # For now, let's try with the original content
-            resp = spitch.speech.transcribe(
-                content=audio_content,  # ✅ Correct parameter name
-                language="en"  # Default language for transcription
-            )
+            # Convert WebM to WAV (supported by Spitch)
+            wav_path = self.convert_webm_to_wav(webm_path)
             
-            text = resp.text
-            print(f"Transcription successful: {text}")
+            try:
+                # Read the converted WAV file
+                with open(wav_path, "rb") as f:
+                    audio_content = f.read()
+                
+                print(f"Converted audio size: {len(audio_content)} bytes, format: WAV")
+
+                # Transcribe using Spitch
+                resp = spitch.speech.transcribe(
+                    content=audio_content,
+                    language="en"  # Source language for transcription
+                )
+                
+                text = resp.text
+                print(f"Transcription successful: {text}")
+
+            finally:
+                # Clean up temporary files
+                os.unlink(webm_path)
+                if os.path.exists(wav_path):
+                    os.unlink(wav_path)
 
         except Exception as e:
             error_msg = f"Transcription failed: {str(e)}"
@@ -196,6 +273,38 @@ class TranscribeAnnouncementView(CreateAnnouncementView):
 
         # 2. Reuse pipeline
         return self._process_announcement(request, text, languages, tone)
+
+    def convert_webm_to_wav(self, webm_path):
+        """Convert WebM audio to WAV format using ffmpeg"""
+        wav_path = webm_path.replace('.webm', '.wav')
+        
+        try:
+            # Use ffmpeg to convert WebM to WAV
+            cmd = [
+                'ffmpeg',
+                '-i', webm_path,
+                '-ac', '1',        # Mono channel
+                '-ar', '16000',    # 16kHz sample rate
+                '-acodec', 'pcm_s16le',  # 16-bit PCM
+                '-y',              # Overwrite output file
+                wav_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise Exception(f"FFmpeg conversion failed: {result.stderr}")
+            
+            print(f"Audio converted successfully: {webm_path} -> {wav_path}")
+            return wav_path
+            
+        except Exception as e:
+            print(f"FFmpeg conversion failed: {e}")
+            return self.fallback_audio_conversion(webm_path)
+
+    def fallback_audio_conversion(self, webm_path):
+        """Fallback conversion method without ffmpeg"""
+        print("Using fallback conversion - trying direct upload")
+        return webm_path
 
 
 class AnnouncementHistoryView(APIView):

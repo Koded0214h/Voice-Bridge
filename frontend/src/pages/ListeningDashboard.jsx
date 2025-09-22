@@ -1,58 +1,167 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { announcementAPI } from '../services/api';
 
 const ListeningDashboard = () => {
   const [isListening, setIsListening] = useState(true);
-  const [isTranslationsOpen, setIsTranslationsOpen] = useState(false);
+  const [isTranslationsOpen, setIsTranslationsOpen] = useState(true);
   const [transcript, setTranscript] = useState('');
   const [isReplaying, setIsReplaying] = useState(false);
   const [replayProgress, setReplayProgress] = useState(0);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [currentAnnouncement, setCurrentAnnouncement] = useState(null);
+  const [selectedLanguages, setSelectedLanguages] = useState([]);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [currentPlayingLanguage, setCurrentPlayingLanguage] = useState(null);
+  const audioRef = useRef(null);
 
-  const translations = [
-    {
-      language: "Yoruba",
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // Language name mapping
+  const languageNames = {
+    'en': 'English',
+    'yo': 'Yoruba', 
+    'ig': 'Igbo',
+    'ha': 'Hausa',
+    'pcm': 'Pidgin English'
+  };
+
+  // Load announcement data from localStorage or route state
+  useEffect(() => {
+    const loadAnnouncementData = () => {
+      try {
+        // Try to get from route state first
+        if (location.state?.announcement) {
+          const announcement = location.state.announcement;
+          setCurrentAnnouncement(announcement);
+          setTranscript(announcement.text);
+          console.log('Loaded announcement from route state:', announcement);
+        } else {
+          // Fallback to localStorage
+          const storedAnnouncement = localStorage.getItem('currentAnnouncement');
+          const storedLanguages = localStorage.getItem('selectedLanguages');
+          
+          if (storedAnnouncement) {
+            const announcement = JSON.parse(storedAnnouncement);
+            setCurrentAnnouncement(announcement);
+            setTranscript(announcement.text);
+            console.log('Loaded announcement from localStorage:', announcement);
+          }
+          
+          if (storedLanguages) {
+            const languagesData = JSON.parse(storedLanguages);
+            setSelectedLanguages(languagesData.languageObjects || []);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading announcement data:', error);
+      }
+    };
+
+    loadAnnouncementData();
+  }, [location.state]);
+
+  // Get translations from current announcement
+  const getTranslations = () => {
+    if (!currentAnnouncement?.translations) return [];
+    
+    return Object.entries(currentAnnouncement.translations).map(([code, text]) => ({
+      language: languageNames[code] || code,
+      code: code,
       flag: "https://flagcdn.com/w320/ng.png",
-      text: "Àǹfààní yìí yóò wà ní kíkọ sílẹ̀ ní ìgbà gan-an gẹ́gẹ́ bí ó ti ń wáyé."
-    },
-    {
-      language: "Igbo",
-      flag: "https://flagcdn.com/w320/ng.png",
-      text: "Mkpu a ga-edegharị ya ozugbo ka a na-ekwu ya."
-    },
-    {
-      language: "Hausa",
-      flag: "https://flagcdn.com/w320/ng.png",
-      text: "Za a rubuta sanarwar nan take yayin da ake yinta."
+      text: text,
+      audioUrl: currentAnnouncement.audio_files?.[code]
+    }));
+  };
+
+  // Play audio for a specific language
+  const playAudio = async (languageCode, languageName) => {
+    try {
+      const audioUrls = currentAnnouncement?.audio_files || {};
+      const audioUrl = audioUrls[languageCode];
+      
+      if (!audioUrl) {
+        console.warn(`No audio URL found for ${languageName}`);
+        alert(`No audio available for ${languageName}`);
+        return;
+      }
+
+      // Stop any currently playing audio
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+
+      setIsPlayingAudio(true);
+      setCurrentPlayingLanguage(languageName);
+
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+
+      audio.onended = () => {
+        setIsPlayingAudio(false);
+        setCurrentPlayingLanguage(null);
+        audioRef.current = null;
+      };
+
+      audio.onerror = (error) => {
+        console.error('Audio playback error:', error);
+        setIsPlayingAudio(false);
+        setCurrentPlayingLanguage(null);
+        audioRef.current = null;
+        alert(`Error playing audio for ${languageName}. Please check the audio file.`);
+      };
+
+      audio.oncanplaythrough = () => {
+        console.log('Audio can play through');
+      };
+
+      audio.onloadstart = () => {
+        console.log('Audio loading started');
+      };
+
+      await audio.play();
+      console.log(`Playing audio for ${languageName}: ${audioUrl}`);
+
+    } catch (error) {
+      console.error('Error playing audio:', error);
+      setIsPlayingAudio(false);
+      setCurrentPlayingLanguage(null);
+      audioRef.current = null;
+      alert(`Error playing audio: ${error.message}`);
     }
-  ];
+  };
 
-  const fullTranscript = `The announcement will be transcribed in real-time as it is being made. 
-
-Latest update: There will be a scheduled maintenance tomorrow from 2:00 AM to 4:00 AM. All systems will be temporarily unavailable during this period.
-
-Please ensure all your work is saved before the maintenance window. The IT department will be available to assist with any urgent matters.`;
+  const stopAudio = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setIsPlayingAudio(false);
+    setCurrentPlayingLanguage(null);
+  };
 
   // Simulate real-time transcription
   useEffect(() => {
-    if (!isListening || isReplaying) return;
+    if (!isListening || isReplaying || transcript) return;
 
     let currentIndex = 0;
-    const words = fullTranscript.split(' ');
+    const demoText = currentAnnouncement?.text || "Welcome to VoiceBridge. Your announcement will appear here once processed.";
+    const words = demoText.split(' ');
     
     const interval = setInterval(() => {
       if (currentIndex < words.length) {
         setTranscript(prev => prev + (prev ? ' ' : '') + words[currentIndex]);
         currentIndex++;
-        
-        // Simulate audio levels
         setAudioLevel(Math.random() * 100);
       } else {
         clearInterval(interval);
       }
-    }, 200); // Add a word every 200ms
+    }, 100);
 
     return () => clearInterval(interval);
-  }, [isListening, isReplaying, fullTranscript]);
+  }, [isListening, isReplaying, transcript, currentAnnouncement]);
 
   // Simulate replay progress
   useEffect(() => {
@@ -81,53 +190,24 @@ Please ensure all your work is saved before the maintenance window. The IT depar
   };
 
   const handleStop = () => {
-    setIsListening(false);
-    setIsReplaying(false);
-    setReplayProgress(0);
-    setTranscript('');
-    setAudioLevel(0);
-    
-    // Simulate stop confirmation
-    console.log('🛑 Listening stopped');
-    
-    // Show temporary confirmation
-    setTimeout(() => {
-      // You could add a toast notification here
-    }, 500);
+    navigate('/mic-setup');
   };
 
   const handleReplay = () => {
     if (isReplaying) return;
-    
     setIsReplaying(true);
     setIsListening(false);
     setReplayProgress(0);
-    
-    // Clear current transcript and simulate replay
     setTranscript('');
-    
-    console.log('🔁 Replaying announcement...');
-    
-    // Simulate replay by quickly building up the transcript
-    let replayIndex = 0;
-    const words = fullTranscript.split(' ');
-    const replayInterval = setInterval(() => {
-      if (replayIndex < words.length) {
-        setTranscript(prev => prev + (prev ? ' ' : '') + words[replayIndex]);
-        replayIndex++;
-      } else {
-        clearInterval(replayInterval);
-      }
-    }, 100); // Faster for replay
   };
 
-  const simulateNewAnnouncement = () => {
-    setTranscript('');
-    setIsListening(true);
-    setIsReplaying(false);
-    setReplayProgress(0);
-    
-    console.log('🎤 Simulating new announcement...');
+  const handleNewRecording = () => {
+    localStorage.removeItem('currentAnnouncement');
+    navigate('/microphone');
+  };
+
+  const handleViewHistory = () => {
+    navigate('/history');
   };
 
   // Audio level visualization
@@ -145,6 +225,9 @@ Please ensure all your work is saved before the maintenance window. The IT depar
     </div>
   );
 
+  const translations = getTranslations();
+  const hasTranslations = translations.length > 0;
+
   return (
     <div className="bg-background-light dark:bg-background-dark text-text-light dark:text-text-dark font-sans antialiased min-h-screen">
       <div className="flex min-h-screen flex-col">
@@ -159,21 +242,18 @@ Please ensure all your work is saved before the maintenance window. The IT depar
             </div>
             <div className="flex items-center gap-4">
               <button 
-                onClick={simulateNewAnnouncement}
+                onClick={handleNewRecording}
                 className="flex items-center gap-2 rounded-lg bg-accent text-gray-800 px-4 py-2 font-medium hover:bg-accent/90 transition-colors"
               >
-                <span className="material-symbols-outlined">campaign</span>
-                <span className="hidden sm:inline">Simulate Announcement</span>
+                <span className="material-symbols-outlined">mic</span>
+                <span className="hidden sm:inline">New Recording</span>
               </button>
-              <div className="relative">
-                <button className="flex items-center gap-2 rounded-lg bg-subtle-light dark:bg-subtle-dark px-4 py-2 font-medium text-text-light dark:text-text-dark hover:bg-primary/20 dark:hover:bg-primary/30 transition-colors">
-                  <span className="material-symbols-outlined">language</span>
-                  <span className="hidden sm:inline">Change Language</span>
-                  <span className="material-symbols-outlined">expand_more</span>
-                </button>
-              </div>
-              <button className="p-2 rounded-full hover:bg-subtle-light dark:hover:bg-subtle-dark transition-colors">
-                <span className="material-symbols-outlined">settings</span>
+              <button 
+                onClick={handleViewHistory}
+                className="flex items-center gap-2 rounded-lg bg-secondary text-white px-4 py-2 font-medium hover:bg-secondary/90 transition-colors"
+              >
+                <span className="material-symbols-outlined">history</span>
+                <span className="hidden sm:inline">History</span>
               </button>
             </div>
           </div>
@@ -182,6 +262,22 @@ Please ensure all your work is saved before the maintenance window. The IT depar
         {/* Main Content */}
         <main className="flex-grow container mx-auto p-4 sm:p-6 lg:p-8">
           <div className="flex flex-col gap-8">
+            {/* Announcement Info Card */}
+            {currentAnnouncement && (
+              <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl p-4">
+                <div className="flex items-center gap-3">
+                  <span className="material-symbols-outlined text-green-600 dark:text-green-400">check_circle</span>
+                  <div>
+                    <h3 className="font-semibold text-green-800 dark:text-green-300">Announcement Processed Successfully</h3>
+                    <p className="text-sm text-green-600 dark:text-green-400">
+                      Created: {new Date(currentAnnouncement.created_at).toLocaleString()} • 
+                      Languages: {currentAnnouncement.languages?.map(lang => languageNames[lang] || lang).join(', ')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Transcript Card */}
             <div className="bg-card-light dark:bg-card-dark rounded-2xl shadow-lg overflow-hidden">
               {/* Status Bar */}
@@ -201,71 +297,85 @@ Please ensure all your work is saved before the maintenance window. The IT depar
                   {isReplaying 
                     ? `Replaying announcement... ${replayProgress}%` 
                     : isListening 
-                    ? 'Listening for announcements...' 
-                    : 'Listening paused'}
+                    ? 'Live transcription mode' 
+                    : 'Transcription paused'}
                 </p>
                 {(isListening || isReplaying) && <AudioVisualizer />}
               </div>
-
-              {/* Replay Progress Bar */}
-              {isReplaying && (
-                <div className="w-full bg-gray-200 dark:bg-gray-700 h-1">
-                  <div 
-                    className="bg-blue-500 h-1 transition-all duration-100"
-                    style={{ width: `${replayProgress}%` }}
-                  />
-                </div>
-              )}
 
               {/* Transcript Content */}
               <div className="p-6 space-y-4">
                 <div className="bg-subtle-light dark:bg-subtle-dark rounded-xl p-6 min-h-[150px] max-h-[300px] overflow-y-auto">
                   <p className="text-lg text-text-light dark:text-text-dark whitespace-pre-wrap leading-relaxed">
-                    {transcript || (isReplaying ? 'Preparing replay...' : 'Waiting for announcement...')}
+                    {transcript || (currentAnnouncement ? currentAnnouncement.text : 'Processing your announcement...')}
                   </p>
-                  {(isListening || isReplaying) && transcript && (
-                    <div className="flex justify-end mt-2">
-                      <span className="text-xs text-gray-500">
-                        {Math.ceil(transcript.split(' ').length / 200 * 100)}% complete
-                      </span>
-                    </div>
-                  )}
                 </div>
 
                 {/* Translations Section */}
-                <div>
-                  <details 
-                    open={isTranslationsOpen}
-                    className="group"
-                    onToggle={(e) => setIsTranslationsOpen(e.target.open)}
-                  >
-                    <summary className="flex cursor-pointer items-center justify-between rounded-lg p-2 hover:bg-subtle-light dark:hover:bg-subtle-dark transition-colors list-none">
-                      <h2 className="text-xl font-bold">Translations</h2>
-                      <span className="material-symbols-outlined transition-transform duration-300 group-open:rotate-180">
-                        expand_more
-                      </span>
-                    </summary>
-                    <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {translations.map((translation, index) => (
-                        <div key={index} className="bg-subtle-light/50 dark:bg-subtle-dark/50 p-4 rounded-xl">
-                          <div className="flex items-center gap-3 mb-2">
-                            <img 
-                              alt={`${translation.language} Flag`} 
-                              className="w-6 h-4 object-cover rounded-sm"
-                              src={translation.flag}
-                            />
-                            <h3 className="font-bold text-text-light dark:text-text-dark">
-                              {translation.language}
-                            </h3>
+                {hasTranslations ? (
+                  <div>
+                    <details open={isTranslationsOpen} className="group">
+                      <summary className="flex cursor-pointer items-center justify-between rounded-lg p-2 hover:bg-subtle-light dark:hover:bg-subtle-dark transition-colors list-none">
+                        <h2 className="text-xl font-bold">Translations & Audio Playback</h2>
+                        <span className="material-symbols-outlined transition-transform duration-300 group-open:rotate-180">
+                          expand_more
+                        </span>
+                      </summary>
+                      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {translations.map((translation, index) => (
+                          <div key={index} className="bg-subtle-light/50 dark:bg-subtle-dark/50 p-4 rounded-xl border">
+                            <div className="flex items-center gap-3 mb-3">
+                              <img 
+                                alt={`${translation.language} Flag`} 
+                                className="w-6 h-4 object-cover rounded-sm"
+                                src={translation.flag}
+                              />
+                              <h3 className="font-bold text-text-light dark:text-text-dark flex-1">
+                                {translation.language}
+                              </h3>
+                              {translation.audioUrl && (
+                                <button
+                                  onClick={() => isPlayingAudio && currentPlayingLanguage === translation.language 
+                                    ? stopAudio() 
+                                    : playAudio(translation.code, translation.language)
+                                  }
+                                  className={`p-2 rounded-full transition-colors ${
+                                    isPlayingAudio && currentPlayingLanguage === translation.language
+                                      ? 'bg-red-500 text-white animate-pulse'
+                                      : 'bg-primary text-white hover:bg-primary/90'
+                                  }`}
+                                >
+                                  <span className="material-symbols-outlined text-sm">
+                                    {isPlayingAudio && currentPlayingLanguage === translation.language ? 'stop' : 'play_arrow'}
+                                  </span>
+                                </button>
+                              )}
+                            </div>
+                            <p className="text-text-light/80 dark:text-text-dark/80 text-sm leading-relaxed mb-3">
+                              {translation.text}
+                            </p>
+                            {translation.audioUrl && (
+                              <div className="text-xs text-gray-500 flex justify-between items-center">
+                                <span>Click play to listen</span>
+                                {isPlayingAudio && currentPlayingLanguage === translation.language && (
+                                  <span className="flex gap-1">
+                                    <div className="w-1 h-3 bg-primary rounded-full animate-pulse"></div>
+                                    <div className="w-1 h-3 bg-primary rounded-full animate-pulse" style={{animationDelay: '0.1s'}}></div>
+                                    <div className="w-1 h-3 bg-primary rounded-full animate-pulse" style={{animationDelay: '0.2s'}}></div>
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          <p className="text-text-light/80 dark:text-text-dark/80 text-sm leading-relaxed">
-                            {translation.text}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </details>
-                </div>
+                        ))}
+                      </div>
+                    </details>
+                  </div>
+                ) : (
+                  <div className="text-center py-4 text-gray-500">
+                    <p>No translations available yet.</p>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -273,21 +383,21 @@ Please ensure all your work is saved before the maintenance window. The IT depar
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
               <button 
                 onClick={handlePauseListening}
-                disabled={isReplaying}
+                disabled={isReplaying || !transcript}
                 className="w-full sm:w-auto flex items-center justify-center gap-2 rounded-xl bg-secondary text-white px-8 py-3 font-bold shadow-lg hover:bg-secondary/90 disabled:bg-gray-400 disabled:cursor-not-allowed transition-all transform hover:scale-105 active:scale-95"
               >
                 <span className="material-symbols-outlined">
                   {isListening ? 'pause_circle' : 'play_circle'}
                 </span>
-                {isListening ? 'Pause Listening' : 'Resume Listening'}
+                {isListening ? 'Pause' : 'Resume'}
               </button>
               
               <button 
                 onClick={handleStop}
                 className="w-full sm:w-auto flex items-center justify-center gap-2 rounded-xl bg-red-500 text-white px-8 py-3 font-bold shadow-lg hover:bg-red-600 transition-all transform hover:scale-105 active:scale-95"
               >
-                <span className="material-symbols-outlined">stop_circle</span>
-                Stop Listening
+                <span className="material-symbols-outlined">mic</span>
+                New Recording
               </button>
               
               <button 
@@ -298,19 +408,16 @@ Please ensure all your work is saved before the maintenance window. The IT depar
                 <span className="material-symbols-outlined">
                   {isReplaying ? 'hourglass_top' : 'replay'}
                 </span>
-                {isReplaying ? 'Replaying...' : 'Replay Announcement'}
+                {isReplaying ? 'Replaying...' : 'Replay'}
               </button>
-            </div>
 
-            {/* Status Information */}
-            <div className="text-center text-sm text-gray-500">
-              <p>
-                {isReplaying 
-                  ? `Replay in progress: ${replayProgress}% complete` 
-                  : isListening 
-                  ? 'Active listening - capturing audio in real-time' 
-                  : 'Listening paused - ready to resume'}
-              </p>
+              <button 
+                onClick={handleViewHistory}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 rounded-xl bg-accent text-gray-800 px-8 py-3 font-bold shadow-lg hover:bg-accent/90 transition-all transform hover:scale-105 active:scale-95"
+              >
+                <span className="material-symbols-outlined">history</span>
+                View History
+              </button>
             </div>
           </div>
         </main>

@@ -5,6 +5,7 @@ import { AppProvider } from './context/AppContext';
 import LanguageSelection from './pages/LanguageSelection';
 import MicrophoneSetup from './pages/MicrophoneSetup';
 import ListeningDashboard from './pages/ListeningDashboard';
+import HistoryPage from './pages/History';
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
             <Route path="/language" element={<LanguageSelection />} />
             <Route path="/mic-setup" element={<MicrophoneSetup />} />
             <Route path="/dashboard" element={<ListeningDashboard />} />
+            <Route path="/history" element={<HistoryPage />} />
           </Routes>
         </div>
       </Router>

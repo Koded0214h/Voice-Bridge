@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 import os
 from pathlib import Path
+import dj_database_url
 from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -27,6 +28,8 @@ SECRET_KEY = 'django-insecure-()+q$*=cp%tz9o(m9m2tfintin2e^lpov4*d+dfbc__c=@arcq
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 ALLOWED_HOSTS = []
 
 
@@ -36,6 +39,8 @@ INSTALLED_APPS = [
     'rest_framework',
     'core',
     'corsheaders',
+    'cloudinary',
+    'cloudinary_storage',
     
     'django.contrib.admin',
     'django.contrib.auth',
@@ -80,11 +85,31 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+if(DATABASE_URL):
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=os.getenv('DATABASE_URL')
+        )
     }
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
+    }
+    
+DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
+
+CLOUDINARY_STORAGE = {
+    'CLOUD_NAME': os.getenv('CLOUDINARY_CLOUD_NAME'),
+    'API_KEY': os.getenv('CLOUDINARY_API_KEY'),
+    'API_SECRET': os.getenv('CLOUDINARY_API_SECRET'),
+}
+
+CLOUDINARY = {
+    'max_file_size': 50 * 1024 * 1024,  # 50MB max file size
+    'resource_type': 'auto',  # Auto-detect resource type
 }
 
 
